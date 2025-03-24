@@ -5,7 +5,7 @@ import re
 from urllib.parse import urljoin
 import time
 
-# --- ダウンロードしたい文献のURL ---
+# --- ダウンロードしたい文献のURLを設定してください ---
 base_url = "https://academic.oup.com"
 toc_url = "https://academic.oup.com/book/7419?login=true"
 
