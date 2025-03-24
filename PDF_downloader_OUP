@@ -1,0 +1,108 @@
+import requests
+from bs4 import BeautifulSoup
+import os
+import re
+from urllib.parse import urljoin
+import time
+
+# --- ダウンロードしたい文献のURL ---
+base_url = "https://academic.oup.com"
+toc_url = "https://academic.oup.com/book/7419?login=true"
+
+# PDF保存先のディレクトリ（なければ作成）
+save_dir = "chapters"
+os.makedirs(save_dir, exist_ok=True)
+
+# --- セッションとヘッダーの設定 ---
+session = requests.Session()
+headers = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/115.0.0.0 Safari/537.36"),
+    "Referer": "https://academic.oup.com",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1"
+}
+session.headers.update(headers)
+
+# --- TOCページの取得 ---
+print("TOCページを取得中...")
+response = session.get(toc_url)
+if response.status_code != 200:
+    print("TOCページの取得に失敗しました:", response.status_code)
+    exit()
+
+soup = BeautifulSoup(response.text, "html.parser")
+
+# --- 章リンクとタイトルの抽出 ---
+# TOC内の各章は <a class="tocLink js-nav-tree-link"> に含まれ、
+# 内部の <span class="tocLink-title at-tocLink-title"> に章タイトルが記載されています。
+chapters = []
+chapter_links = soup.find_all("a", class_="tocLink js-nav-tree-link")
+if not chapter_links:
+    print("章のリンクが見つかりませんでした。")
+    exit()
+
+for a in chapter_links:
+    relative_url = a.get("href")
+    chapter_url = urljoin(base_url, relative_url)
+    
+    # 章タイトルの取得（例：<span class="tocLink-title at-tocLink-title">）
+    title_span = a.find("span", class_="tocLink-title at-tocLink-title")
+    if title_span:
+        chapter_title = title_span.get_text(strip=True)
+    else:
+        chapter_title = "Unknown_Chapter"
+    
+    # ※「chapter/」の削除は行わない
+    chapters.append({"title": chapter_title, "url": chapter_url})
+
+print(f"抽出された章の数: {len(chapters)}")
+
+# --- 各章ページからPDFリンクを抽出してダウンロード ---
+for chapter in chapters:
+    print(f"\n章「{chapter['title']}」を処理中...")
+    chapter_url = chapter["url"]
+    
+    chap_resp = session.get(chapter_url)
+    if chap_resp.status_code != 200:
+        print(f"章ページの取得に失敗しました: {chap_resp.status_code}")
+        continue
+    
+    chap_soup = BeautifulSoup(chap_resp.text, "html.parser")
+    
+    # 章ページ内で、hrefに ".pdf" を含むリンクを検索
+    pdf_link = chap_soup.find("a", href=re.compile(r'\.pdf'))
+    if not pdf_link:
+        print(f"章「{chapter['title']}」にはPDFリンクが見つかりませんでした。")
+        continue
+    
+    pdf_relative = pdf_link.get("href")
+    pdf_url = urljoin(chapter_url, pdf_relative)
+    print(f"PDFリンク: {pdf_url}")
+    
+    # ファイル名に使用できない文字を置換して安全な名前にする
+    safe_title = re.sub(r'[\\/*?:"<>|]', "_", chapter["title"])
+    
+    # PDFリンクのURLから「chapter-数字」のパターンがあれば、その数字を先頭に追加
+    match = re.search(r'chapter-(\d+)', pdf_url)
+    if match:
+        chapter_number = match.group(1)
+        safe_title = f"{chapter_number} {safe_title}"
+    
+    file_path = os.path.join(save_dir, f"{safe_title}.pdf")
+    
+    pdf_resp = session.get(pdf_url)
+    if pdf_resp.status_code == 200:
+        with open(file_path, "wb") as f:
+            f.write(pdf_resp.content)
+        print(f"PDFを保存しました: {file_path}")
+    else:
+        print(f"PDFのダウンロードに失敗しました: {pdf_resp.status_code}")
+    
+    # サーバーへの負荷軽減のため、各リクエストの間に待機
+    time.sleep(1)
+    
